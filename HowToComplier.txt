@@ -1,0 +1,7 @@
+Adding the .inf to .dsc file.
+
+xxxPkg/UefiTool/UefiTool.inf {
+  <LibraryClasses>
+    ShellLib|ShellPkg/Library/UefiShellLib/UefiShellLib.inf
+    ShellCEntryLib|ShellPkg/Library/UefiShellCEntryLib/UefiShellCEntryLib.inf
+}
