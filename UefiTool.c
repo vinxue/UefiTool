@@ -1,5 +1,14 @@
 /** @file
-    A simple UEFI tool for debugging.
+  A simple UEFI tool for debugging.
+
+  Copyright (c) 2017 - 2019, Gavin Xue. All rights reserved.<BR>
+  This program and the accompanying materials
+  are licensed and made available under the terms and conditions of the BSD License
+  which accompanies this distribution.  The full text of the license may be found at
+  http://opensource.org/licenses/bsd-license.php
+
+  THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
+  WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 **/
 
 #include "UefiTool.h"
@@ -41,6 +50,8 @@ StrUpr (
 #define OPCODE_CPUID_BIT                      BIT2
 #define OPCODE_ALLPROCESSOR_BIT               BIT3
 #define OPCODE_PROCESSOR_INDEX_BIT            BIT4
+#define OPCODE_SGDT_BIT                       BIT5
+#define OPCODE_CR_BIT                       BIT6
 
 typedef struct {
   // MSR
@@ -71,6 +82,10 @@ ShowHelpInfo(
   Print (L"  UefiTool.efi WRMSR [MSRIndex] [MSRValue]\n\n");
   Print (L"Read CPUID:\n");
   Print (L"  UefiTool.efi CPUID [CPUID_Index] [CPUID_SubIndex]\n\n");
+  Print (L"Read GDTR resister:\n");
+  Print (L"  UefiTool.efi -SGDT\n\n");
+  Print (L"Read CR resister:\n");
+  Print (L"  UefiTool.efi -CR\n\n");
 }
 
 /**
@@ -194,17 +209,27 @@ UefiToolRoutine (
   UINT32             RegisterEcx;
   UINT32             RegisterEdx;
   UINTN              Index;
+  IA32_DESCRIPTOR    GdtrDesc;
 
+  //
+  // Read a MSR register
+  //
   if (Opcode == OPCODE_RDMSR_BIT) {
     MsrData = AsmReadMsr64 (gUtContext.MsrIndex);
     Print (L"RDMSR[0x%X]: 0x%016lX\n", gUtContext.MsrIndex, MsrData);
   }
 
+  //
+  // Write a MSR register
+  //
   if (Opcode == OPCODE_WRMSR_BIT) {
     MsrData = AsmWriteMsr64 (gUtContext.MsrIndex, gUtContext.MsrValue);
     Print (L"WR Data 0x%016lX to MSR[0x%X]\n", gUtContext.MsrValue, gUtContext.MsrIndex);
   }
 
+  //
+  // Retrieves CPUID information for BSP
+  //
   if (Opcode == OPCODE_CPUID_BIT) {
     AsmCpuidEx (gUtContext.CpuIdIndex, gUtContext.CpuIdSubIndex, &RegisterEax, &RegisterEbx, &RegisterEcx, &RegisterEdx);
     Print (L"CPUID Index: 0x%X     SubIndex: 0x%X\n", gUtContext.CpuIdIndex, gUtContext.CpuIdSubIndex);
@@ -213,6 +238,29 @@ UefiToolRoutine (
     Print (L"ECX = 0x%08X\n", RegisterEcx);
     Print (L"EDX = 0x%08X\n", RegisterEdx);
   }
+
+  //
+  // Reads the current Global Descriptor Table Register(GDTR) descriptor
+  //
+  if (Opcode == OPCODE_SGDT_BIT) {
+    AsmReadGdtr (&GdtrDesc);
+    Print (L"GDTR Base: 0x%X\n", GdtrDesc.Base);
+    Print (L"GDTR Limit: 0x%X\n", GdtrDesc.Limit);
+  }
+
+  //
+  // Reads the current value of the Control Register (CR0/2/3/4)
+  //
+  if (Opcode == OPCODE_CR_BIT) {
+    Print (L"CR0: 0x%08X\n",  AsmReadCr0 ());
+    Print (L"CR2: 0x%08X\n",  AsmReadCr2 ());
+    Print (L"CR3: 0x%08X\n",  AsmReadCr3 ());
+    Print (L"CR4: 0x%08X\n",  AsmReadCr4 ());
+  }
+
+  //
+  // Read a MSR register for a specific AP
+  //
   if (Opcode == (OPCODE_RDMSR_BIT | OPCODE_PROCESSOR_INDEX_BIT)) {
     Index = gUtContext.ProcessorIndex;
     if (Index == mBspIndex) {
@@ -234,6 +282,34 @@ UefiToolRoutine (
     }
   }
 
+  //
+  // Read a MSR register for BSP and all APs
+  //
+  if (Opcode == (OPCODE_RDMSR_BIT | OPCODE_ALLPROCESSOR_BIT)) {
+    for (Index = 0; Index < mProcessorNum; Index++) {
+      if (Index == mBspIndex) {
+        Print (L"RDMSR[0x%X][ProcNum: %d S%d_C%d_T%d]: [64b] 0x%16lX\n", gUtContext.MsrIndex, Index,
+          mProcessorLocBuf[Index].Location.Package,
+          mProcessorLocBuf[Index].Location.Core,
+          mProcessorLocBuf[Index].Location.Thread,
+          AsmReadMsr64 (gUtContext.MsrIndex));
+      } else {
+        mMpService->StartupThisAP (
+                      mMpService,
+                      (EFI_AP_PROCEDURE) ApUtReadMsr,
+                      Index,
+                      NULL,
+                      0,
+                      &Index,
+                      NULL
+                      );
+      }
+    }
+  }
+
+  //
+  // Retrieves CPUID information for BSP and all APs
+  //
   if (Opcode == (OPCODE_CPUID_BIT | OPCODE_PROCESSOR_INDEX_BIT)) {
     Index = gUtContext.ProcessorIndex;
     if (Index == mBspIndex) {
@@ -257,28 +333,6 @@ UefiToolRoutine (
                     &Index,
                     NULL
                     );
-    }
-  }
-
-  if (Opcode == (OPCODE_RDMSR_BIT | OPCODE_ALLPROCESSOR_BIT)) {
-    for (Index = 0; Index < mProcessorNum; Index++) {
-      if (Index == mBspIndex) {
-        Print (L"RDMSR[0x%X][ProcNum: %d S%d_C%d_T%d]: [64b] 0x%16lX\n", gUtContext.MsrIndex, Index,
-          mProcessorLocBuf[Index].Location.Package,
-          mProcessorLocBuf[Index].Location.Core,
-          mProcessorLocBuf[Index].Location.Thread,
-          AsmReadMsr64 (gUtContext.MsrIndex));
-      } else {
-        mMpService->StartupThisAP (
-                      mMpService,
-                      (EFI_AP_PROCEDURE) ApUtReadMsr,
-                      Index,
-                      NULL,
-                      0,
-                      &Index,
-                      NULL
-                      );
-      }
     }
   }
 
@@ -310,7 +364,10 @@ ShellAppMain (
   UINT64                    Opcode;
 
   Print (L"\nUEFI Debug Tool. Version: 1.0.0.1\n");
-  Print (L"Copyright (c) 2017 - 2018 Gavin Xue. All rights reserved.\n\n");
+  Print (L"Copyright (c) 2017 - 2019 Gavin Xue. All rights reserved.\n\n");
+
+  Opcode = 0x0;
+  SetMem (&gUtContext, sizeof (UEFI_TOOL_CONTEXT), 0x0);
 
   if (Argc == 1) {
     ShowHelpInfo ();
@@ -323,14 +380,15 @@ ShellAppMain (
         (!StrCmp (Argv[1], L"/?")) || (!StrCmp (Argv[1], L"-?"))) {
       ShowHelpInfo ();
       return EFI_SUCCESS;
+    } else if ((!StrCmp (Argv[1], L"/SGDT")) || (!StrCmp (Argv[1], L"-SGDT"))) {
+      Opcode |= OPCODE_SGDT_BIT;
+    } else if ((!StrCmp (Argv[1], L"/CR")) || (!StrCmp (Argv[1], L"-CR"))) {
+      Opcode |= OPCODE_CR_BIT;
     } else {
       Print (L"Invaild parameter.\n");
       return EFI_INVALID_PARAMETER;
     }
   }
-
-  Opcode = 0x0;
-  SetMem (&gUtContext, sizeof (UEFI_TOOL_CONTEXT), 0x0);
 
   Status = GetProcessorsCpuLocation ();
 
