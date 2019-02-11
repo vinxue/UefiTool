@@ -51,7 +51,9 @@ StrUpr (
 #define OPCODE_ALLPROCESSOR_BIT               BIT3
 #define OPCODE_PROCESSOR_INDEX_BIT            BIT4
 #define OPCODE_SGDT_BIT                       BIT5
-#define OPCODE_CR_BIT                       BIT6
+#define OPCODE_CR_BIT                         BIT6
+#define OPCODE_RMM_BIT                        BIT7
+#define OPCODE_WMM_BIT                        BIT8
 
 typedef struct {
   // MSR
@@ -64,6 +66,11 @@ typedef struct {
 
   UINTN                     ProcessorIndex;
 
+  // MEM / MMIO / IO
+  UINTN                     MmAddress;
+  UINTN                     MmValue;
+  UINTN                     MmWidth;
+  UINT8                     MmAccessType;  // 0: Mem / MMIO; 1: IO
 } UEFI_TOOL_CONTEXT;
 
 UEFI_TOOL_CONTEXT    gUtContext;
@@ -210,6 +217,7 @@ UefiToolRoutine (
   UINT32             RegisterEdx;
   UINTN              Index;
   IA32_DESCRIPTOR    GdtrDesc;
+  UINTN              Data;
 
   //
   // Read a MSR register
@@ -336,6 +344,91 @@ UefiToolRoutine (
     }
   }
 
+  //
+  // Read MEM/MMIO/IO address
+  //
+  if (Opcode & (OPCODE_RMM_BIT | OPCODE_WMM_BIT)) {
+    if (gUtContext.MmAccessType) {  // IO
+      switch (gUtContext.MmWidth) {
+        case 1:
+          if (Opcode & OPCODE_RMM_BIT) {  // Read
+            Data = IoRead8 (gUtContext.MmAddress);
+          } else {
+            IoWrite8 (gUtContext.MmAddress, (UINT8) gUtContext.MmValue);
+          }
+          break;
+        case 2:
+          if (Opcode & OPCODE_RMM_BIT) {  // Read
+            Data = IoRead16 (gUtContext.MmAddress);
+          } else {
+            IoWrite16 (gUtContext.MmAddress, (UINT16) gUtContext.MmValue);
+          }
+          break;
+        case 4:
+          if (Opcode & OPCODE_RMM_BIT) {  // Read
+            Data = IoRead32 (gUtContext.MmAddress);
+          } else {
+            IoWrite32 (gUtContext.MmAddress, (UINT32) gUtContext.MmValue);
+          }
+          break;
+        case 8:
+          if (Opcode & OPCODE_RMM_BIT) {  // Read
+            Data = IoRead64 (gUtContext.MmAddress);
+          } else {
+            IoWrite64 ((UINTN) gUtContext.MmAddress, (UINT64) gUtContext.MmValue);
+          }
+          break;
+        default:
+          ASSERT (FALSE);
+          break;
+      }
+      if (Opcode & OPCODE_RMM_BIT) {  // Read
+        Print (L"Read IO [0x%X] = 0x%X\n", gUtContext.MmAddress, Data);
+      } else {
+        Print (L"Write 0x%x to IO [0x%X]\n", gUtContext.MmValue, gUtContext.MmAddress);
+      }
+    } else {  // MEM/MMIO
+      switch (gUtContext.MmWidth) {
+        case 1:
+          if (Opcode & OPCODE_RMM_BIT) {  // Read
+            Data = MmioRead8 (gUtContext.MmAddress);
+          } else {
+            MmioWrite8 (gUtContext.MmAddress, (UINT8) gUtContext.MmValue);
+          }
+          break;
+        case 2:
+          if (Opcode & OPCODE_RMM_BIT) {  // Read
+            Data = MmioRead16 (gUtContext.MmAddress);
+          } else {
+            MmioWrite16 (gUtContext.MmAddress, (UINT16) gUtContext.MmValue);
+          }
+          break;
+        case 4:
+          if (Opcode & OPCODE_RMM_BIT) {  // Read
+            Data = MmioRead32 (gUtContext.MmAddress);
+          } else {
+            MmioWrite32 (gUtContext.MmAddress, (UINT32) gUtContext.MmValue);
+          }
+          break;
+        case 8:
+          if (Opcode & OPCODE_RMM_BIT) {  // Read
+            Data = IoRead64 (gUtContext.MmAddress);
+          } else {
+            MmioWrite64 ((UINTN) gUtContext.MmAddress, (UINT64) gUtContext.MmValue);
+          }
+          break;
+        default:
+          ASSERT (FALSE);
+          break;
+      }
+      if (Opcode & OPCODE_RMM_BIT) {  // Read
+        Print (L"Read Mem [0x%X] = 0x%X\n", gUtContext.MmAddress, Data);
+      } else {
+        Print (L"Write 0x%x to Mem [0x%X]\n", gUtContext.MmValue, gUtContext.MmAddress);
+      }
+    }
+  }
+
 }
 
 /**
@@ -368,6 +461,8 @@ ShellAppMain (
 
   Opcode = 0x0;
   SetMem (&gUtContext, sizeof (UEFI_TOOL_CONTEXT), 0x0);
+
+  gUtContext.MmWidth = 4;
 
   if (Argc == 1) {
     ShowHelpInfo ();
@@ -421,7 +516,27 @@ ShellAppMain (
       gUtContext.ProcessorIndex  = StrHexToUintn (Argv[Index + 1]);
       Index += 2;
       Opcode |= OPCODE_PROCESSOR_INDEX_BIT;
-    } else {
+    } else if ((Index + 1 < Argc) && (StrCmp (Argv[Index], L"-RMM") == 0)) {
+      gUtContext.MmAddress = StrHexToUintn (Argv[Index + 1]);
+      Index += 2;
+      Opcode |= OPCODE_RMM_BIT;
+    } else if ((Index + 1 < Argc) && (StrCmp (Argv[Index], L"-WMM") == 0)) {
+      gUtContext.MmAddress = StrHexToUintn (Argv[Index + 1]);
+      gUtContext.MmValue = StrHexToUintn (Argv[Index + 2]);
+      Index += 3;
+      Opcode |= OPCODE_WMM_BIT;
+    } else if ((Index < Argc) && (StrCmp (Argv[Index], L"-W") == 0)) {
+      gUtContext.MmWidth = StrHexToUintn (Argv[Index + 1]);
+      Index += 2;
+    } else if ((Index < Argc) && (StrCmp (Argv[Index], L"-MEM") == 0)) {
+      gUtContext.MmAccessType = 0;
+      Index++;
+    } else if ((Index < Argc) && (StrCmp (Argv[Index], L"-IO") == 0)) {
+      gUtContext.MmAccessType = 1;
+      Index++;
+    }
+
+    else {
       Index++;
     }
   }

@@ -24,6 +24,7 @@
 #include <Library/BaseMemoryLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/BaseMemoryLib.h>
+#include <Library/IoLib.h>
 #include <Protocol/MpService.h>
 
 #endif

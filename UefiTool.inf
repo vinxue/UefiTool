@@ -37,6 +37,7 @@
   UefiBootServicesTableLib
   MemoryAllocationLib
   BaseMemoryLib
+  IoLib
 
 [Protocols]
   gEfiMpServiceProtocolGuid
