@@ -103,7 +103,7 @@ ShowHelpInfo(
   @param[out] Num                  Returns processor number.
 
   @retval EFI_SUCCESS              Operation completed successfully.
-  @retval EFI_UNSUPPORTED       MpService protocol not found.
+  @retval EFI_UNSUPPORTED          MpService protocol not found.
 
 **/
 EFI_STATUS
